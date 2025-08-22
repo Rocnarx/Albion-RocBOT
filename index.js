@@ -493,7 +493,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       content: `✅ Te uniste como **${etiqueta}**.\n\n📸 Tu build sugerida:\n${urlBuild}`,
       components: [],
     });
-    setTimeout(() => interaction.deleteReply().catch(() => {}), 30000);
     return;
   }
 });
