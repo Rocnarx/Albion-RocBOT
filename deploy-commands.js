@@ -13,10 +13,13 @@ const commands = [
         type: 3, // STRING
         required: true,
         choices: [
-          { name: 'General', value: 'general' },
+          { name: 'Roaming', value: 'roaming' },
+          { name: 'Rastreo', value: 'rastreo' },
+          { name: 'Gankeo', value: 'gankeo' },
           { name: 'PvP', value: 'pvp' },
           { name: 'ZvZ', value: 'zvz' },
-          { name: 'Roads', value: 'roads' },
+          { name: 'Dorados', value: 'dorados' },
+          { name: 'Estatica', value: 'estatica' },
         ],
       },
       {

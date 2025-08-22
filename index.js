@@ -83,9 +83,40 @@ function normalizarNombre(t) {
 function modoToPrefix(modo) {
   const m = (modo || '').toLowerCase();
   if (m === 'zvz') return 'ZvZ';
-  if (m === 'roads') return 'Roads';
+  if (m === 'dorados') return 'Dorados';
   if (m === 'pvp') return 'PvP';
+  if (m === 'roaming') return 'Roaming';
+  if (m === 'rastreo') return 'Rastreo';
+  if (m === 'gankeo') return 'Gankeo';
+  if (m === 'estatica') return 'Estatica';
   return m ? m[0].toUpperCase() + m.slice(1) : 'General';
+}
+
+// 👉 NUEVO: detectar categoría por arma
+function categoriaPorArma(arma) {
+  for (const [cat, lista] of Object.entries(armasPorCategoria)) {
+    if (lista.includes(arma)) return cat;
+  }
+  return null;
+}
+
+// 👉 NUEVO: TAGs permitidos por categoría
+// - Healers (NATURALEZA, SAGRADO): HEALER y SUPPORT (sin TANK)
+// - DPS mágicos/soporte (FUEGO, ESCARCHA, MALDITO, ARCANO, ARCOS, BALLESTAS): DPS y SUPPORT
+// - Melee pesados (MAZAS, MARTILLOS): TANK y DPS (pueden ir dps como pediste)
+// - Híbridos (ESPADAS, LANZAS, HACHAS, GUANTES): DPS, TANK y SUPPORT
+function tagsPermitidosPorCategoria(cat) {
+  if (!cat) return ['DPS', 'HEALER', 'SUPPORT', 'TANK'];
+  const healerCats = ['NATURALEZA', 'SAGRADO'];
+  const dpsSupportCats = ['FUEGO', 'ESCARCHA', 'MALDITO', 'ARCANO', 'ARCOS', 'BALLESTAS'];
+  const tankDpsCats = ['MAZAS', 'MARTILLOS'];
+  const hibridos = ['ESPADAS', 'LANZAS', 'HACHAS', 'GUANTES'];
+
+  if (healerCats.includes(cat)) return ['HEALER', 'SUPPORT'];
+  if (dpsSupportCats.includes(cat)) return ['DPS', 'SUPPORT'];
+  if (tankDpsCats.includes(cat)) return ['TANK', 'DPS'];
+  if (hibridos.includes(cat)) return ['DPS', 'TANK', 'SUPPORT'];
+  return ['DPS', 'HEALER', 'SUPPORT', 'TANK'];
 }
 
 // eventos: Map<eventMessageId, {
@@ -237,7 +268,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '⚠️ No encuentro los datos del evento.', flags: 64 });
       }
 
-      // Menú de categorías (siempre <= 25 opciones)
       const categorias = Object.keys(armasPorCategoria);
       const catOptions = categorias.map(c => ({ label: c, value: c }));
 
@@ -262,7 +292,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!ev) return interaction.reply({ content: '⚠️ No encuentro el evento.', flags: 64 });
       if (!ev.roles.length) return interaction.reply({ content: '⚠️ Aún no hay roles disponibles.', flags: 64 });
 
-      // Mostrar solo roles que no estén llenos o que ya sean del usuario
       const actualDelUser = ev.roles.find(r => ev.roleMeta?.[r]?.miembros?.includes(interaction.user.id));
       const opciones = ev.roles
         .filter(r => {
@@ -317,7 +346,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  // ====== SELECT: Categoría -> mostrar armas de esa categoría ======
+  // ====== SELECT: Categoría -> armas ======
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('selectRoleCat-')) {
     const [, eventMessageId] = interaction.customId.split('-');
     const ev = eventos.get(eventMessageId);
@@ -346,7 +375,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // ====== SELECT: Arma -> pedir Tag (DPS/HEALER/SUPPORT) ======
+  // ====== SELECT: Arma -> pedir Tag permitido según categoría ======
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('selectRoleWeap-')) {
     const [, eventMessageId] = interaction.customId.split('-');
     const ev = eventos.get(eventMessageId);
@@ -358,16 +387,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const armaBase = interaction.values[0];
 
-    const tagOptions = [
-      { label: 'DPS', value: `tag|${armaBase}|DPS` },
-      { label: 'HEALER', value: `tag|${armaBase}|HEALER` },
-      { label: 'SUPPORT', value: `tag|${armaBase}|SUPPORT` },
-    ];
+    const cat = categoriaPorArma(armaBase);
+    const permitidos = tagsPermitidosPorCategoria(cat); // 👈 aquí filtramos
+    const tagOptions = permitidos.map(t => ({ label: t, value: `tag|${armaBase}|${t}` }));
 
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`selectRoleTag-${eventMessageId}`)
-        .setPlaceholder(`Elige etiqueta para ${armaBase}: DPS / HEALER / SUPPORT`)
+        .setPlaceholder(`Elige etiqueta para ${armaBase}`)
         .addOptions(tagOptions)
     );
 
@@ -378,7 +405,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // ====== SELECT: Tag -> pedir Capacidad (1-5) y crear rol ======
+  // ====== SELECT: Tag -> capacidad (1-5) y crear rol ======
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('selectRoleTag-')) {
     const [, eventMessageId] = interaction.customId.split('-');
     const ev = eventos.get(eventMessageId);
@@ -391,7 +418,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const selected = interaction.values[0]; // "tag|<armaBase>|<TAG>"
     const [, armaBase, tag] = selected.split('|');
 
-    // Selector de capacidad 1..5
     const caps = [1,2,3,4,5].map(n => ({ label: `${n} jugador${n>1?'es':''}`, value: `cap|${armaBase}|${tag}|${n}` }));
     const rowCap = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -469,13 +495,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: '⚠️ Ese rol ya está completo.', flags: 64 });
     }
 
-    // liberar rol anterior si tenía
     const anterior = ev.roles.find(r => ev.roleMeta?.[r]?.miembros?.includes(interaction.user.id));
     if (anterior && anterior !== etiqueta) {
       ev.roleMeta[anterior].miembros = ev.roleMeta[anterior].miembros.filter(id => id !== interaction.user.id);
     }
 
-    // agregar a este rol si no estaba
     if (!yaEstoy) {
       meta.miembros = meta.miembros || [];
       meta.miembros.push(interaction.user.id);
@@ -483,16 +507,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     await refreshEventMessage(interaction.channel, eventMessageId);
 
-    // URL de build <Modo>_<Arma>_<TAG>.jpg
+    // URL de build RAW <Modo>_<Arma>_<TAG>.png
     const modo = modoToPrefix(ev.modo || 'General');
     const armaNorm = normalizarNombre(meta.arma || etiqueta);
     const tag = meta.tag || 'DPS';
     const urlBuild = `https://raw.githubusercontent.com/Rocnarx/Albion-RocBOT/master/${modo}_${armaNorm}_${tag}.png`;
 
-    await interaction.update({
-      content: `✅ Te uniste como **${etiqueta}**.\n\n📸 Tu build sugerida:\n${urlBuild}`,
-      components: [],
+    await interaction.reply({
+      embeds: [
+        {
+          title: `🌟 Tu build sugerida`,
+          image: { url: urlBuild },
+          color: 0x00AE86,
+        }
+      ],
+      ephemeral: true
     });
+
     return;
   }
 });
