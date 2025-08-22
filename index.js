@@ -72,8 +72,27 @@ const armasPorCategoria = {
   ],
 };
 
+// ====== Helpers ======
+function normalizarNombre(t) {
+  return (t || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_]/g, '');
+}
+function modoToPrefix(modo) {
+  const m = (modo || '').toLowerCase();
+  if (m === 'zvz') return 'ZvZ';
+  if (m === 'roads') return 'Roads';
+  if (m === 'pvp') return 'PvP';
+  return m ? m[0].toUpperCase() + m.slice(1) : 'General';
+}
 
-// eventos: Map<eventMessageId, { creador, modo, roles[], asignaciones{rol->userId} }>
+// eventos: Map<eventMessageId, {
+//   creador, modo,
+//   roles: string[],                                   // etiquetas visibles ("Bastón X HEALER")
+//   roleMeta: Record<string,{ arma:string, tag:string, cap:number, miembros:string[] }>
+// }>
 const eventos = new Map();
 
 client.once('clientReady', () => {
@@ -82,9 +101,14 @@ client.once('clientReady', () => {
 
 function buildRolesText(ev) {
   if (!ev.roles.length) return '*—*';
-  return ev.roles
-    .map(r => (ev.asignaciones[r] ? `- ${r} · <@${ev.asignaciones[r]}>` : `- ${r}`))
-    .join('\n');
+  return ev.roles.map(et => {
+    const meta = ev.roleMeta?.[et];
+    if (!meta) return `- ${et}`;
+    const cap = meta.cap ?? 1;
+    const count = meta.miembros?.length ?? 0;
+    const lista = count ? ` · ${meta.miembros.map(uid => `<@${uid}>`).join(', ')}` : '';
+    return `- ${et} (${count}/${cap})${lista}`;
+  }).join('\n');
 }
 
 async function refreshEventMessage(channel, eventMessageId) {
@@ -154,7 +178,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       creador: interaction.user.id,
       modo,
       roles: [],
-      asignaciones: {},
+      roleMeta: {},
     };
 
     const embed = new EmbedBuilder()
@@ -238,14 +262,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!ev) return interaction.reply({ content: '⚠️ No encuentro el evento.', flags: 64 });
       if (!ev.roles.length) return interaction.reply({ content: '⚠️ Aún no hay roles disponibles.', flags: 64 });
 
-      const yaTengo = Object.entries(ev.asignaciones).find(([, uid]) => uid === interaction.user.id)?.[0];
-      const libres = ev.roles.filter(r => !ev.asignaciones[r] || ev.asignaciones[r] === interaction.user.id);
+      // Mostrar solo roles que no estén llenos o que ya sean del usuario
+      const actualDelUser = ev.roles.find(r => ev.roleMeta?.[r]?.miembros?.includes(interaction.user.id));
+      const opciones = ev.roles
+        .filter(r => {
+          const meta = ev.roleMeta?.[r];
+          if (!meta) return true;
+          const lleno = (meta.miembros?.length ?? 0) >= (meta.cap ?? 1);
+          const esMio = meta.miembros?.includes(interaction.user.id);
+          return !lleno || esMio;
+        })
+        .map(r => {
+          const meta = ev.roleMeta?.[r];
+          const count = meta?.miembros?.length ?? 0;
+          const cap = meta?.cap ?? 1;
+          const etiqueta = (actualDelUser === r) ? `${r} (tu rol actual)` : `${r} (${count}/${cap})`;
+          return { label: etiqueta, value: r };
+        });
 
-      const opciones = libres.map(r => ({
-        label: ev.asignaciones[r] === interaction.user.id ? `${r} (tu rol actual)` : r,
-        value: r,
-      }));
-      if (yaTengo) opciones.push({ label: 'Quitar participación', value: '__leave__' });
+      if (actualDelUser) opciones.push({ label: 'Quitar participación', value: '__leave__' });
 
       const select = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -304,7 +339,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .addOptions(opcionesArmas)
     );
 
-    // Reemplazamos el selector de categorías por el de armas
     await interaction.update({
       content: `Categoría seleccionada: **${categoria}**. Ahora elige el arma:`,
       components: [selectArmas],
@@ -312,9 +346,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // ====== SELECT: Arma -> agregar rol al evento (solo creador) ======
+  // ====== SELECT: Arma -> pedir Tag (DPS/HEALER/SUPPORT) ======
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('selectRoleWeap-')) {
-    const [, eventMessageId /* , categoria */] = interaction.customId.split('-');
+    const [, eventMessageId] = interaction.customId.split('-');
     const ev = eventos.get(eventMessageId);
     if (!ev) return;
 
@@ -322,72 +356,146 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: '❌ Solo el creador puede agregar roles.', flags: 64 });
     }
 
-    const arma = interaction.values[0];
+    const armaBase = interaction.values[0];
 
-    if (ev.roles.includes(arma)) {
-      await interaction.update({ content: '⚠️ Ese rol ya existe en el evento.', components: [] });
+    const tagOptions = [
+      { label: 'DPS', value: `tag|${armaBase}|DPS` },
+      { label: 'HEALER', value: `tag|${armaBase}|HEALER` },
+      { label: 'SUPPORT', value: `tag|${armaBase}|SUPPORT` },
+    ];
+
+    const row = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`selectRoleTag-${eventMessageId}`)
+        .setPlaceholder(`Elige etiqueta para ${armaBase}: DPS / HEALER / SUPPORT`)
+        .addOptions(tagOptions)
+    );
+
+    await interaction.update({
+      content: `Arma seleccionada: **${armaBase}**. Elige la etiqueta del rol:`,
+      components: [row],
+    });
+    return;
+  }
+
+  // ====== SELECT: Tag -> pedir Capacidad (1-5) y crear rol ======
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('selectRoleTag-')) {
+    const [, eventMessageId] = interaction.customId.split('-');
+    const ev = eventos.get(eventMessageId);
+    if (!ev) return;
+
+    if (interaction.user.id !== ev.creador) {
+      return interaction.reply({ content: '❌ Solo el creador puede agregar roles.', flags: 64 });
+    }
+
+    const selected = interaction.values[0]; // "tag|<armaBase>|<TAG>"
+    const [, armaBase, tag] = selected.split('|');
+
+    // Selector de capacidad 1..5
+    const caps = [1,2,3,4,5].map(n => ({ label: `${n} jugador${n>1?'es':''}`, value: `cap|${armaBase}|${tag}|${n}` }));
+    const rowCap = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`selectRoleCap-${eventMessageId}`)
+        .setPlaceholder(`Capacidad para ${armaBase} ${tag}`)
+        .addOptions(caps)
+    );
+
+    await interaction.update({
+      content: `Etiqueta seleccionada: **${armaBase} ${tag}**. Elige la **capacidad**:`,
+      components: [rowCap],
+    });
+    return;
+  }
+
+  // ====== SELECT: Capacidad -> crear rol arma+tag con cap ======
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('selectRoleCap-')) {
+    const [, eventMessageId] = interaction.customId.split('-');
+    const ev = eventos.get(eventMessageId);
+    if (!ev) return;
+
+    if (interaction.user.id !== ev.creador) {
+      return interaction.reply({ content: '❌ Solo el creador puede agregar roles.', flags: 64 });
+    }
+
+    const selected = interaction.values[0]; // "cap|<armaBase>|<tag>|<n>"
+    const [, armaBase, tag, nStr] = selected.split('|');
+    const cap = Math.max(1, Math.min(5, Number(nStr) || 1));
+
+    const etiqueta = `${armaBase} ${tag}`; // ej: "Bastón de Escarcha HEALER"
+
+    if (ev.roles.includes(etiqueta)) {
+      await interaction.update({ content: '⚠️ Ese rol ya existe.', components: [] });
       setTimeout(() => interaction.deleteReply().catch(() => {}), 1500);
       return;
     }
 
-    ev.roles.push(arma);
-    await refreshEventMessage(interaction.channel, eventMessageId);
+    ev.roles.push(etiqueta);
+    ev.roleMeta[etiqueta] = { arma: armaBase, tag, cap, miembros: [] };
 
-    await interaction.update({
-      content: `✅ Rol **${arma}** agregado al evento.`,
-      components: [],
-    });
+    await refreshEventMessage(interaction.channel, eventMessageId);
+    await interaction.update({ content: `✅ Rol **${etiqueta}** agregado (capacidad ${cap}).`, components: [] });
     setTimeout(() => interaction.deleteReply().catch(() => {}), 1500);
     return;
   }
 
   // ====== SELECT: Elegir/cambiar/salir rol (todos) ======
-if (interaction.isStringSelectMenu() && interaction.customId.startsWith('pickRoleSelect-')) {
-  const [, eventMessageId] = interaction.customId.split('-');
-  const ev = eventos.get(eventMessageId);
-  if (!ev) return;
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('pickRoleSelect-')) {
+    const [, eventMessageId] = interaction.customId.split('-');
+    const ev = eventos.get(eventMessageId);
+    if (!ev) return;
 
-  const choice = interaction.values[0];
+    const etiqueta = interaction.values[0];
 
-  if (choice === '__leave__') {
-    const actual = Object.entries(ev.asignaciones).find(([, uid]) => uid === interaction.user.id)?.[0];
-    if (actual) delete ev.asignaciones[actual];
+    if (etiqueta === '__leave__') {
+      const anterior = ev.roles.find(r => ev.roleMeta?.[r]?.miembros?.includes(interaction.user.id));
+      if (anterior) {
+        ev.roleMeta[anterior].miembros = ev.roleMeta[anterior].miembros.filter(id => id !== interaction.user.id);
+        await refreshEventMessage(interaction.channel, eventMessageId);
+      }
+      await interaction.update({ content: '👋 Has salido del evento.', components: [] });
+      setTimeout(() => interaction.deleteReply().catch(() => {}), 1500);
+      return;
+    }
+
+    const meta = ev.roleMeta?.[etiqueta];
+    if (!meta) {
+      return interaction.reply({ content: '⚠️ Rol inválido.', flags: 64 });
+    }
+
+    const lleno = (meta.miembros?.length ?? 0) >= (meta.cap ?? 1);
+    const yaEstoy = meta.miembros?.includes(interaction.user.id);
+
+    if (lleno && !yaEstoy) {
+      return interaction.reply({ content: '⚠️ Ese rol ya está completo.', flags: 64 });
+    }
+
+    // liberar rol anterior si tenía
+    const anterior = ev.roles.find(r => ev.roleMeta?.[r]?.miembros?.includes(interaction.user.id));
+    if (anterior && anterior !== etiqueta) {
+      ev.roleMeta[anterior].miembros = ev.roleMeta[anterior].miembros.filter(id => id !== interaction.user.id);
+    }
+
+    // agregar a este rol si no estaba
+    if (!yaEstoy) {
+      meta.miembros = meta.miembros || [];
+      meta.miembros.push(interaction.user.id);
+    }
 
     await refreshEventMessage(interaction.channel, eventMessageId);
-    await interaction.update({ content: '👋 Has salido del evento.', components: [] });
-    setTimeout(() => interaction.deleteReply().catch(() => {}), 1500);
+
+    // URL de build <Modo>_<Arma>_<TAG>.jpg
+    const modo = modoToPrefix(ev.modo || 'General');
+    const armaNorm = normalizarNombre(meta.arma || etiqueta);
+    const tag = meta.tag || 'DPS';
+    const urlBuild = `https://raw.githubusercontent.com/Rocnarx/Albion-RocBOT/master/${modo}_${armaNorm}_${tag}.png`;
+
+    await interaction.update({
+      content: `✅ Te uniste como **${etiqueta}**.\n\n📸 Tu build sugerida:\n${urlBuild}`,
+      components: [],
+    });
+    setTimeout(() => interaction.deleteReply().catch(() => {}), 30000);
     return;
   }
-
-  const ocupadoPor = ev.asignaciones[choice];
-  if (ocupadoPor && ocupadoPor !== interaction.user.id) {
-    return interaction.reply({ content: '⚠️ Ese rol ya está ocupado.', flags: 64 });
-  }
-
-  const rolActual = Object.entries(ev.asignaciones).find(([, uid]) => uid === interaction.user.id)?.[0];
-  if (rolActual && rolActual !== choice) delete ev.asignaciones[rolActual];
-
-  ev.asignaciones[choice] = interaction.user.id;
-
-  await refreshEventMessage(interaction.channel, eventMessageId);
-
-  // 🔥 Construir la URL de la build
-  const normalizar = (texto) =>
-    texto
-      .normalize("NFD")                     // quitar acentos
-      .replace(/[\u0300-\u036f]/g, "")      // quitar tildes
-      .replace(/\s+/g, "_")                 // espacios por guiones bajos
-      .replace(/[^A-Za-z0-9_]/g, "");       // quitar caracteres raros
-
-  const modo = ev.modo ? ev.modo.charAt(0).toUpperCase() + ev.modo.slice(1).toLowerCase() : "General";
-  const rolFormateado = normalizar(choice);
-  const urlBuild = `https://github.com/Rocnarx/Albion-RocBOT/blob/master/${modo}_${rolFormateado}.jpg`;
-
-  await interaction.update({ content: `✅ Te uniste como **${choice}**.\n\n📸 Tu build sugerida:\n${urlBuild}`, components: [] });
-  setTimeout(() => interaction.deleteReply().catch(() => {}), 30000); // se borra a los 30s
-  return;
-}
-
 });
 
 client.login(process.env.DISCORD_TOKEN);
