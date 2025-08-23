@@ -89,6 +89,7 @@ function modoToPrefix(modo) {
   if (m === 'rastreo') return 'Rastreo';
   if (m === 'gankeo') return 'Gankeo';
   if (m === 'estatica') return 'Estatica';
+  if (m === 'ava') return 'Ava';
   return m ? m[0].toUpperCase() + m.slice(1) : 'General';
 }
 

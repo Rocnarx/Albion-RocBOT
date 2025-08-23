@@ -20,6 +20,7 @@ const commands = [
           { name: 'ZvZ', value: 'zvz' },
           { name: 'Dorados', value: 'dorados' },
           { name: 'Estatica', value: 'estatica' },
+          { name: 'Ava', value: 'ava' },
         ],
       },
       {
