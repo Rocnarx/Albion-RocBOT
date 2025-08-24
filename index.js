@@ -52,7 +52,7 @@ const armasPorCategoria = {
   ],
   FUEGO: [
     "Bastón de Fuego", "Gran Bastón de Fuego", "Bastón Infernal",
-    "Fuego Salvaje", "Bastón de Azufre", "Canción del Alba",
+    "Fuego Salvaje", "Bastón de Azufre", "Canción del Alba", "Baston Flamigero",
   ],
   ESCARCHA: [
     "Bastón de Escarcha", "Gran Bastón de Escarcha", "Bastón Glacial",
@@ -90,6 +90,7 @@ function modoToPrefix(modo) {
   if (m === 'gankeo') return 'Gankeo';
   if (m === 'estatica') return 'Estatica';
   if (m === 'ava') return 'Ava';
+  if (m === 'grupales') return 'Grupales';
   return m ? m[0].toUpperCase() + m.slice(1) : 'General';
 }
 
